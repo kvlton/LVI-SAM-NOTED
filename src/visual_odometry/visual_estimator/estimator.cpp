@@ -98,21 +98,21 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration, const
     if (frame_count != 0) // 滑窗内的关键帧个数
     {
         // 预积分
-        pre_integrations[frame_count]->push_back(dt, linear_acceleration, angular_velocity);
-        tmp_pre_integration->push_back(dt, linear_acceleration, angular_velocity);
+        pre_integrations[frame_count]->push_back(dt, linear_acceleration, angular_velocity); // 相邻两个关键帧之间的预积分
+        tmp_pre_integration->push_back(dt, linear_acceleration, angular_velocity);           // 相邻两个普通帧之间的预积分
 
         // 保存imu数据
         dt_buf[frame_count].push_back(dt);
         linear_acceleration_buf[frame_count].push_back(linear_acceleration);
         angular_velocity_buf[frame_count].push_back(angular_velocity);
 
-        // 中值积分计算PVQ
+        // 中值积分计算运动模型PVQ (第2讲P38)
         int j = frame_count;
-        Vector3d un_acc_0 = Rs[j] * (acc_0 - Bas[j]) - g;
+        Vector3d un_acc_0 = Rs[j] * (acc_0 - Bas[j]) - g;               // a0
         Vector3d un_gyr = 0.5 * (gyr_0 + angular_velocity) - Bgs[j];    // w
         Rs[j] *= Utility::deltaQ(un_gyr * dt).toRotationMatrix();       // Q
-        Vector3d un_acc_1 = Rs[j] * (linear_acceleration - Bas[j]) - g;
-        Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);                  // a
+        Vector3d un_acc_1 = Rs[j] * (linear_acceleration - Bas[j]) - g; // a1
+        Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);                  // a = a0 + a1
         Ps[j] += dt * Vs[j] + 0.5 * dt * dt * un_acc;                   // P
         Vs[j] += dt * un_acc;                                           // V
     }
@@ -128,7 +128,7 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
     // 1.Add new image features
     // 1.添加特征点, 检测视差 (根据视差决定marge最老帧还是次新帧)
     if (f_manager.addFeatureCheckParallax(frame_count, image, td))
-        marginalization_flag = MARGIN_OLD;
+        marginalization_flag = MARGIN_OLD; // 是关键帧, marge最老帧
     else
         marginalization_flag = MARGIN_SECOND_NEW;
 
@@ -138,9 +138,9 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
 
     Headers[frame_count] = header;
 
-    // 2.构造图像帧 (图像数据, 时间戳, 临时预积分)
+    // 2.构造普通帧 (图像数据, 时间戳, 预积分)
     ImageFrame imageframe(image, lidar_initialization_info, header.stamp.toSec());
-    imageframe.pre_integration = tmp_pre_integration;
+    imageframe.pre_integration = tmp_pre_integration; // 相对于上一帧的预积分
     all_image_frame.insert(make_pair(header.stamp.toSec(), imageframe));
     
     tmp_pre_integration = new IntegrationBase{acc_0, gyr_0, Bas[frame_count], Bgs[frame_count]};
@@ -295,7 +295,7 @@ bool Estimator::initialStructure()
     }
 
     // 2.check imu observibility
-    // 2.通过加速度标准差来判断imu是否有效
+    // 2.通过加速度标准差来判断imu激励是否足够
     {
         map<double, ImageFrame>::iterator frame_it;
         Vector3d sum_g; // 加速度之和
@@ -326,10 +326,10 @@ bool Estimator::initialStructure()
         }
     }
 
-    // 3.global sfm
-    Quaterniond Q[frame_count + 1];
-    Vector3d T[frame_count + 1];
-    map<int, Vector3d> sfm_tracked_points;
+    // 3.global sfm 求解滑动窗口内所有帧的位姿，和所有路标点的3d坐标
+    Quaterniond Q[frame_count + 1];        // 旋转
+    Vector3d T[frame_count + 1];           // 平移
+    map<int, Vector3d> sfm_tracked_points; // 3d坐标
 
     // 3.1.提取所有features
     vector<SFMFeature> sfm_f;
@@ -340,7 +340,7 @@ bool Estimator::initialStructure()
         SFMFeature tmp_feature;
         tmp_feature.state = false;
         tmp_feature.id = it_per_id.feature_id;
-        // 遍历能观察到该feature的frames
+        // 遍历能观察到该feature的所有frames
         for (auto &it_per_frame : it_per_id.feature_per_frame)
         {
             imu_j++;
@@ -373,7 +373,7 @@ bool Estimator::initialStructure()
     }
 
     // 4.solve pnp for all frame
-    // 4.对于不在滑动窗口内的其他frames, 也进行pnp求解位姿
+    // 4.对于不在滑动窗口内的其他frames, 也进行pnp求解位姿, 为估计速度, 重力和尺度做准备
     map<double, ImageFrame>::iterator frame_it;
     map<int, Vector3d>::iterator it;
     frame_it = all_image_frame.begin( );
@@ -386,8 +386,8 @@ bool Estimator::initialStructure()
         if((frame_it->first) == Headers[i].stamp.toSec())
         {
             frame_it->second.is_key_frame = true;
-            frame_it->second.R = Q[i].toRotationMatrix() * RIC[0].transpose();
-            frame_it->second.T = T[i];
+            frame_it->second.R = Q[i].toRotationMatrix() * RIC[0].transpose(); // Q^c0_bk
+            frame_it->second.T = T[i];                                         // P^c0_ck
             i++;
             continue;
         }
@@ -454,7 +454,6 @@ bool Estimator::initialStructure()
         ROS_INFO("misalign visual structure with IMU");
         return false;
     }
-
 }
 
 // 视觉惯导对齐: 将视觉sfm结构和imu预积分结果进行对齐
@@ -462,7 +461,7 @@ bool Estimator::visualInitialAlign()
 {
     VectorXd x;
     // 1.solve scale
-    // 1.初始化陀螺仪bias; 初始化速度, 重力和尺度
+    // 1.初始化陀螺仪bias; 初始化重力方向, 速度, 以及尺度
     bool result = VisualIMUAlignment(all_image_frame, Bgs, g, x);
     if(!result)
     {
@@ -470,17 +469,18 @@ bool Estimator::visualInitialAlign()
         return false;
     }
 
-    // 2.change state 滑动窗口内keyframes的PVQ
+    // 2.change state
+    // 2.获取图像坐标系c0下的图像PVQ: V在初始化中更新过了
     for (int i = 0; i <= frame_count; i++)
     {
-        Matrix3d Ri = all_image_frame[Headers[i].stamp.toSec()].R;
-        Vector3d Pi = all_image_frame[Headers[i].stamp.toSec()].T;
+        Matrix3d Ri = all_image_frame[Headers[i].stamp.toSec()].R; // R^c0_bk
+        Vector3d Pi = all_image_frame[Headers[i].stamp.toSec()].T; // P^c0_ck
         Ps[i] = Pi;
         Rs[i] = Ri;
         all_image_frame[Headers[i].stamp.toSec()].is_key_frame = true;
     }
 
-    // 3.重新三角化
+    // 3.对特征点重新三角化计算深度
     // reset all depth to -1
     VectorXd dep = f_manager.getDepthVector(); // features逆深度
     for (int i = 0; i < dep.size(); i++)
@@ -503,10 +503,10 @@ bool Estimator::visualInitialAlign()
         pre_integrations[i]->repropagate(Vector3d::Zero(), Bgs[i]);
     }
 
-    // 5.尺度缩放
+    // 5.尺度缩放, 并且获取图像坐标系c0下的imuPVQ
     // 5.1.Ps
     for (int i = frame_count; i >= 0; i--)
-        Ps[i] = s * Ps[i] - Rs[i] * TIC[0] - (s * Ps[0] - Rs[0] * TIC[0]);
+        Ps[i] = s * Ps[i] - Rs[i] * TIC[0] - (s * Ps[0] - Rs[0] * TIC[0]); // P^c0_bk
     // 5.2.Vs
     int kv = -1;
     map<double, ImageFrame>::iterator frame_i;
@@ -515,7 +515,7 @@ bool Estimator::visualInitialAlign()
         if(frame_i->second.is_key_frame)
         {
             kv++;
-            Vs[kv] = frame_i->second.R * x.segment<3>(kv * 3); // 优化后的速度
+            Vs[kv] = frame_i->second.R * x.segment<3>(kv * 3); // 优化后的速度 V^c0_bk
         }
     }
     // 5.3.深度
@@ -527,18 +527,20 @@ bool Estimator::visualInitialAlign()
         it_per_id.estimated_depth *= s;
     }
 
-    // 6.相机坐标系 --> 世界坐标系
-    Matrix3d R0 = Utility::g2R(g);
-    double yaw = Utility::R2ypr(R0 * Rs[0]).x();
-    R0 = Utility::ypr2R(Eigen::Vector3d{-yaw, 0, 0}) * R0;
-    g = R0 * g;
+    // 6.将前面得到的PVQ转到世界坐标系w下
+    Matrix3d R0 = Utility::g2R(g);                         // 重力对齐 R^w_c0 (第7讲P18)
+    double yaw = Utility::R2ypr(R0 * Rs[0]).x();           // yaw角归零
+    R0 = Utility::ypr2R(Eigen::Vector3d{-yaw, 0, 0}) * R0; // R0 = R1 * R0
+    g = R0 * g;                                            // g = R1 * R0 * g;
     //Matrix3d rot_diff = R0 * Rs[0].transpose();
+
+    // 将imu的PVQ转到世界坐标系w下
     Matrix3d rot_diff = R0;
     for (int i = 0; i <= frame_count; i++)
     {
-        Ps[i] = rot_diff * Ps[i];
-        Rs[i] = rot_diff * Rs[i];
-        Vs[i] = rot_diff * Vs[i];
+        Ps[i] = rot_diff * Ps[i]; // P^w_bi
+        Rs[i] = rot_diff * Rs[i]; // Q^w_bi
+        Vs[i] = rot_diff * Vs[i]; // V^w_bi
     }
     ROS_DEBUG_STREAM("g0     " << g.transpose());
     ROS_DEBUG_STREAM("my R0  " << Utility::R2ypr(Rs[0]).transpose()); 
@@ -753,7 +755,7 @@ bool Estimator::failureDetection()
     if (abs(tmp_P.z() - last_P.z()) > 1)
     {
         ROS_ERROR("VINS big z translation, restart estimator!");
-        return true; 
+        return true;
     }
     Matrix3d tmp_R = Rs[WINDOW_SIZE];
     Matrix3d delta_R = tmp_R.transpose() * last_R;
@@ -784,7 +786,7 @@ void Estimator::optimization()
         problem.AddParameterBlock(para_SpeedBias[i], SIZE_SPEEDBIAS);               // V, Ba, Bg
     }
 
-    // 2.camera to imu外参
+    // 2.相机和imu之间的外参 Tbc
     for (int i = 0; i < NUM_OF_CAM; i++)
     {
         ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
@@ -917,13 +919,13 @@ void Estimator::optimization()
             {
                 if (last_marginalization_parameter_blocks[i] == para_Pose[0] ||
                     last_marginalization_parameter_blocks[i] == para_SpeedBias[0])
-                    drop_set.push_back(i);
+                    drop_set.push_back(i); // 和最老帧有关的都marg掉
             }
             // construct new marginlization_factor
             MarginalizationFactor *marginalization_factor = new MarginalizationFactor(last_marginalization_info);
             ResidualBlockInfo *residual_block_info = new ResidualBlockInfo(marginalization_factor, NULL,
                                                                            last_marginalization_parameter_blocks,
-                                                                           drop_set);
+                                                                           drop_set); // 和最老帧有关的都marg掉
 
             marginalization_info->addResidualBlockInfo(residual_block_info);
         }
@@ -935,8 +937,7 @@ void Estimator::optimization()
                 IMUFactor* imu_factor = new IMUFactor(pre_integrations[1]);
                 ResidualBlockInfo *residual_block_info = new ResidualBlockInfo(imu_factor, NULL,
                                                                            vector<double *>{para_Pose[0], para_SpeedBias[0], para_Pose[1], para_SpeedBias[1]},
-                                                                           vector<int>{0, 1});
-                marginalization_info->addResidualBlockInfo(residual_block_info);
+                                                                           vector<int>{0, 1}); // 边缘化 i时刻的 状态变量P,Q,V,Ba,Bg
             }
         }
 
@@ -952,10 +953,10 @@ void Estimator::optimization()
                 ++feature_index;
 
                 int imu_i = it_per_id.start_frame, imu_j = imu_i - 1;
-                if (imu_i != 0) 
-                    continue; // 只选择被边缘化的帧的features
+                if (imu_i != 0)
+                    continue; // 只选择最老帧的features
 
-                // 被首帧观测到的归一化坐标 (第一个归一化坐标)
+                // 被最老帧观测到的归一化坐标 (第一个归一化坐标)
                 Vector3d pts_i = it_per_id.feature_per_frame[0].point;
 
                 for (auto &it_per_frame : it_per_id.feature_per_frame)
@@ -980,7 +981,7 @@ void Estimator::optimization()
                         ProjectionFactor *f = new ProjectionFactor(pts_i, pts_j);
                         ResidualBlockInfo *residual_block_info = new ResidualBlockInfo(f, loss_function,
                                                                                        vector<double *>{para_Pose[imu_i], para_Pose[imu_j], para_Ex_Pose[0], para_Feature[feature_index]},
-                                                                                       vector<int>{0, 3});
+                                                                                       vector<int>{0, 3}); // 边缘化 最老帧的位姿 和 所有特征点的深度
                         marginalization_info->addResidualBlockInfo(residual_block_info);
                     }
                 }
@@ -997,7 +998,7 @@ void Estimator::optimization()
         marginalization_info->marginalize();
         ROS_DEBUG("marginalization %f ms", t_margin.toc());
 
-        // 10.1.6.
+        // 10.1.6.滑动窗口, 滑动所有状态变量
         std::unordered_map<long, double *> addr_shift;
         for (int i = 1; i <= WINDOW_SIZE; i++)
         {
@@ -1028,6 +1029,8 @@ void Estimator::optimization()
 
             MarginalizationInfo *marginalization_info = new MarginalizationInfo();
             vector2double();
+
+            // 上一轮的边缘化先验信息
             if (last_marginalization_info)
             {
                 vector<int> drop_set;
@@ -1056,6 +1059,7 @@ void Estimator::optimization()
             marginalization_info->marginalize();
             ROS_DEBUG("end marginalization, %f ms", t_margin.toc());
             
+            // 滑动窗口, 滑动所有状态变量
             std::unordered_map<long, double *> addr_shift;
             for (int i = 0; i <= WINDOW_SIZE; i++)
             {

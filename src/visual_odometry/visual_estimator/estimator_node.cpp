@@ -74,18 +74,14 @@ void predict(const sensor_msgs::ImuConstPtr &imu_msg)
     double rz = imu_msg->angular_velocity.z;
     Eigen::Vector3d angular_velocity{rx, ry, rz};
 
-    // 中值积分计算PVQ
-    Eigen::Vector3d un_acc_0 = tmp_Q * (acc_0 - tmp_Ba) - estimator.g;
-
+    // 中值积分计算运动模型PVQ (第2讲P38)
+    Eigen::Vector3d un_acc_0 = tmp_Q * (acc_0 - tmp_Ba) - estimator.g;  // a0
     Eigen::Vector3d un_gyr = 0.5 * (gyr_0 + angular_velocity) - tmp_Bg; // w
-    tmp_Q = tmp_Q * Utility::deltaQ(un_gyr * dt);         // Q
-
-    Eigen::Vector3d un_acc_1 = tmp_Q * (linear_acceleration - tmp_Ba) - estimator.g;
-
-    Eigen::Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);               // a
-
-    tmp_P = tmp_P + dt * tmp_V + 0.5 * dt * dt * un_acc;  // P
-    tmp_V = tmp_V + dt * un_acc;                          // V
+    tmp_Q = tmp_Q * Utility::deltaQ(un_gyr * dt);                       // Q
+    Eigen::Vector3d un_acc_1 = tmp_Q * (linear_acceleration - tmp_Ba) - estimator.g; // a1
+    Eigen::Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);               // a = a0 + a1
+    tmp_P = tmp_P + dt * tmp_V + 0.5 * dt * dt * un_acc;                // P
+    tmp_V = tmp_V + dt * un_acc;                                        // V
 
     acc_0 = linear_acceleration;
     gyr_0 = angular_velocity;
@@ -325,7 +321,7 @@ void process()
                 ROS_ASSERT(z == 1);
                 Eigen::Matrix<double, 8, 1> xyz_uv_velocity_depth;
                 xyz_uv_velocity_depth << x, y, z, p_u, p_v, velocity_x, velocity_y, depth;
-                image[feature_id].emplace_back(camera_id,  xyz_uv_velocity_depth);
+                image[feature_id].emplace_back(camera_id,  xyz_uv_velocity_depth); // 数据格式
             }
 
             // 3.2.从激光里程计中获取先验位姿

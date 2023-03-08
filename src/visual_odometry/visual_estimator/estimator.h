@@ -71,10 +71,10 @@ class Estimator
     VectorXd bp[2], backup_b;
 
     // camera to imu
-    Matrix3d ric[NUM_OF_CAM];
+    Matrix3d ric[NUM_OF_CAM]; // 单目的话数量为1
     Vector3d tic[NUM_OF_CAM];
 
-    // PVQ
+    // 运动模型 PVQ
     Vector3d Ps[(WINDOW_SIZE + 1)];
     Vector3d Vs[(WINDOW_SIZE + 1)];
     Matrix3d Rs[(WINDOW_SIZE + 1)];
@@ -85,10 +85,10 @@ class Estimator
     // 滑动窗口
     Matrix3d back_R0, last_R, last_R0;
     Vector3d back_P0, last_P, last_P0;
-    std_msgs::Header Headers[(WINDOW_SIZE + 1)];
+    std_msgs::Header Headers[(WINDOW_SIZE + 1)]; // 关键帧的时间戳
 
     // 预积分
-    IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)];
+    IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)]; // 两帧之间的预积分 (关键帧之间)
     Vector3d acc_0, gyr_0; // 上一时刻的加速度a和角速度w
 
     // imu数据
@@ -126,8 +126,8 @@ class Estimator
     MarginalizationInfo *last_marginalization_info;
     vector<double *> last_marginalization_parameter_blocks;
 
-    map<double, ImageFrame> all_image_frame; // 滑动窗口时间段内的所有frames
-    IntegrationBase *tmp_pre_integration;
+    map<double, ImageFrame> all_image_frame; // 所有普通帧 <时间戳, ImageFrame>
+    IntegrationBase *tmp_pre_integration; // 两普通帧之间的预积分
 
     int failureCount;
 };

@@ -85,7 +85,7 @@ bool FeatureManager::addFeatureCheckParallax(int frame_count, const map<int, vec
     }
 
     if (frame_count < 2 || last_track_num < 20)
-        return true; // merge最老帧
+        return true; // 是关键帧, merge最老帧
 
     for (auto &it_per_id : feature)
     {

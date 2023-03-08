@@ -1279,16 +1279,18 @@ public:
         for (int i = 0; i < laserCloudSelNum; i++) 
         {
             // lidar -> camera
+            // 3d坐标
             pointOri.x = laserCloudOri->points[i].y;
             pointOri.y = laserCloudOri->points[i].z;
             pointOri.z = laserCloudOri->points[i].x;
             // lidar -> camera
+            // xyz为梯度方向, intensity为距离 (点线+点面)
             coeff.x = coeffSel->points[i].y;
             coeff.y = coeffSel->points[i].z;
             coeff.z = coeffSel->points[i].x;
             coeff.intensity = coeffSel->points[i].intensity;
             // in camera
-            // 计算xyz上的雅克比 (rpy上的雅克比:距离单位向量)
+            // 位姿的雅克比
             float arx = (crx*sry*srz*pointOri.x + crx*crz*sry*pointOri.y - srx*sry*pointOri.z) * coeff.x
                       + (-srx*srz*pointOri.x - crz*srx*pointOri.y - crx*pointOri.z) * coeff.y
                       + (crx*cry*srz*pointOri.x + crx*cry*crz*pointOri.y - cry*srx*pointOri.z) * coeff.z;
@@ -1302,7 +1304,6 @@ public:
                       + (crx*crz*pointOri.x - crx*srz*pointOri.y) * coeff.y
                       + ((sry*srz + cry*crz*srx)*pointOri.x + (crz*sry-cry*srx*srz)*pointOri.y)*coeff.z;
             // lidar -> camera
-            // 雅克比(rpy, xyz)
             matA.at<float>(i, 0) = arz;
             matA.at<float>(i, 1) = arx;
             matA.at<float>(i, 2) = ary;
@@ -1349,7 +1350,7 @@ public:
         if (isDegenerate) {
             cv::Mat matX2(6, 1, CV_32F, cv::Scalar::all(0));
             matX.copyTo(matX2);
-            matX = matP * matX2;
+            matX = matP * matX2; // 直接抛去退化项
         }
 
         // 更新位姿 (rpy xyz)
@@ -1417,6 +1418,7 @@ public:
     // 将scan to map匹配到的位姿与imu进行融合
     void transformUpdate()
     {
+        // 如果imu可用的话, 使用imu的roll patch
         if (cloudInfo.imuAvailable == true)
         {
             if (std::abs(cloudInfo.imuPitchInit) < 1.4) // 俯仰角小于1.4
@@ -1722,7 +1724,7 @@ public:
     // 发布 lidar里程计 以及 tf:odom_to_lidar
     void publishOdometry()
     {
-        // 1.Publish odometry for ROS 发布当前帧的位姿(优化后的)
+        // 1.Publish odometry for ROS 发布当前帧的位姿(优化后的最终位姿)
         nav_msgs::Odometry laserOdometryROS;
         laserOdometryROS.header.stamp = timeLaserInfoStamp;
         laserOdometryROS.header.frame_id = "odom";
@@ -1731,7 +1733,7 @@ public:
         laserOdometryROS.pose.pose.position.y = transformTobeMapped[4];
         laserOdometryROS.pose.pose.position.z = transformTobeMapped[5];
         laserOdometryROS.pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
-        laserOdometryROS.pose.covariance[0] = double(imuPreintegrationResetId);
+        laserOdometryROS.pose.covariance[0] = double(imuPreintegrationResetId); // 当前帧是否经历了闭环
         pubOdomAftMappedROS.publish(laserOdometryROS);
         // 2.Publish TF 发布odom_to_lidar的坐标变换
         static tf::TransformBroadcaster br;

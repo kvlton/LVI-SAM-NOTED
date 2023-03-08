@@ -1,6 +1,6 @@
 #include "initial_alignment.h"
 
-// 初始化陀螺仪bias
+// 初始化陀螺仪bias (第7讲P12, 公式推导P11)
 // https://blog.csdn.net/weixin_35488643/article/details/112535151/
 void solveGyroscopeBias(map<double, ImageFrame> &all_image_frame, Vector3d* Bgs)
 {
@@ -22,14 +22,14 @@ void solveGyroscopeBias(map<double, ImageFrame> &all_image_frame, Vector3d* Bgs)
         tmp_A.setZero();
         VectorXd tmp_b(3);    // b_ = (r^bk_bk+1)^-1 * (q^c0_bk)^-1 * (q^c0_bk+1)
         tmp_b.setZero();
-        // q_ij = (q^c0_bk)^-1 * (q^c0_bk+1) 视觉得到的imu预积分
+        // q_ij = (q^c0_bk)^-1 * (q^c0_bk+1) 视觉得到的相对旋转(转到imu坐标系)
         Eigen::Quaterniond q_ij(frame_i->second.R.transpose() * frame_j->second.R);
-        // J: R对陀螺仪bias的偏导
+        // J: imu旋转预积分, 对陀螺仪bias的偏导
         tmp_A = frame_j->second.pre_integration->jacobian.template block<3, 3>(O_R, O_BG);
-        // b_ = (r^bk_bk+1)^-1 * q_ij, imu实际的预积分 与 视觉得到的imu预积分 的差异
+        // b_ = 2 * (r^bk_bk+1)^-1 * q_ij, imu旋转预积分 与 视觉得到的旋转 的差异
         tmp_b = 2 * (frame_j->second.pre_integration->delta_q.inverse() * q_ij).vec();
 
-        // 1.2.填充A和b_
+        // 1.2.填充A和b
         A += tmp_A.transpose() * tmp_A; // A = J^t * J
         b += tmp_A.transpose() * tmp_b; // b = J^t * b_
     }
@@ -64,7 +64,7 @@ MatrixXd TangentBasis(Vector3d &g0)
     return bc;
 }
 
-// 重力细化 (固定重力的模长, 优化速度, 重力和尺度)
+// 重力细化 (固定重力的模长, 再次优化速度, 重力和尺度, 第7讲P16)
 void RefineGravity(map<double, ImageFrame> &all_image_frame, Vector3d &g, VectorXd &x)
 {
     Vector3d g0 = g.normalized() * G.norm(); // 固定模长为9.81
@@ -147,7 +147,7 @@ void RefineGravity(map<double, ImageFrame> &all_image_frame, Vector3d &g, Vector
     g = g0;
 }
 
-// 初始化速度, 重力和尺度
+// 初始化重力方向, 速度, 以及尺度 (第7讲P14)
 bool LinearAlignment(map<double, ImageFrame> &all_image_frame, Vector3d &g, VectorXd &x)
 {
     int all_frame_count = all_image_frame.size();
@@ -224,7 +224,7 @@ bool LinearAlignment(map<double, ImageFrame> &all_image_frame, Vector3d &g, Vect
         return false;
     }
 
-    // 3.重力细化 (固定重力的模长, 优化速度, 重力和尺度)
+    // 3.重力细化 (固定重力的模长, 再次优化速度, 重力和尺度)
     RefineGravity(all_image_frame, g, x);
     s = (x.tail<1>())(0) / 100.0;
     (x.tail<1>())(0) = s;
@@ -241,7 +241,7 @@ bool VisualIMUAlignment(map<double, ImageFrame> &all_image_frame, Vector3d* Bgs,
     // 1.初始化陀螺仪bias
     solveGyroscopeBias(all_image_frame, Bgs);
 
-    // 2.初始化速度, 重力和尺度
+    // 2.初始化重力方向, 速度, 以及尺度
     if(LinearAlignment(all_image_frame, g, x))
         return true;
     else 

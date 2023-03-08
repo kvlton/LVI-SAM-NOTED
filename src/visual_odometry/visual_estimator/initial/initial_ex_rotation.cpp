@@ -8,16 +8,17 @@ InitialEXRotation::InitialEXRotation(){
     ric = Matrix3d::Identity();
 }
 
-// 标定camera to imu的旋转
+// 估计相机和imu之间的旋转外参 (第7讲P10)
 bool InitialEXRotation::CalibrationExRotation(vector<pair<Vector3d, Vector3d>> corres, Quaterniond delta_q_imu, Matrix3d &calib_ric_result)
 {
     // 每次进入该函数, 都会增加一个约束, 进行一次标定
     frame_count++;
-    Rc.push_back(solveRelativeR(corres));              // 视觉匹配得到的q  (camera系)
-    Rimu.push_back(delta_q_imu.toRotationMatrix());    // imu预积分得到的q (imu系)
-    Rc_g.push_back(ric.inverse() * delta_q_imu * ric); // imu预积分得到的q (camera系), 会使用上一次迭代得到的结果ric
+    Rc.push_back(solveRelativeR(corres));              // 通过对极几何, 求解两帧之间的相对旋转R (camera系)
+    Rimu.push_back(delta_q_imu.toRotationMatrix());    // 通过imu预积分,得到两帧之间的相对旋转R (imu系)
 
-    // 求解 (L+R)q=0, 即Ax=0
+    Rc_g.push_back(ric.inverse() * delta_q_imu * ric); // 用来计算两种旋转的差异, ric为上一次迭代得到的外参
+
+    // 求解 (L-R)q=0, 即Ax=0
     Eigen::MatrixXd A(frame_count * 4, 4);
     A.setZero();
     int sum_ok = 0;
@@ -26,7 +27,7 @@ bool InitialEXRotation::CalibrationExRotation(vector<pair<Vector3d, Vector3d>> c
         // 1.鲁棒核函数
         Quaterniond r1(Rc[i]);
         Quaterniond r2(Rc_g[i]);
-        // 分别通过视觉和imu得到的R的差异
+        // 用角度表示两种旋转的差异
         double angular_distance = 180 / M_PI * r1.angularDistance(r2);
         ROS_DEBUG(
             "%d %f", i, angular_distance);
@@ -52,14 +53,14 @@ bool InitialEXRotation::CalibrationExRotation(vector<pair<Vector3d, Vector3d>> c
         R.block<1, 3>(3, 0) = -q.transpose();
         R(3, 3) = w;
 
-        A.block<4, 4>((i - 1) * 4, 0) = huber * (L - R);
+        A.block<4, 4>((i - 1) * 4, 0) = huber * (L - R); // 鲁棒权重
     }
 
     // 3.svd分解, 求解Ax=0
     JacobiSVD<MatrixXd> svd(A, ComputeFullU | ComputeFullV);
     Matrix<double, 4, 1> x = svd.matrixV().col(3); // 右奇异向量
     Quaterniond estimated_R(x);
-    ric = estimated_R.toRotationMatrix().inverse();
+    ric = estimated_R.toRotationMatrix().inverse(); // 每次迭代都需要更新外参
     //cout << svd.singularValues().transpose() << endl;
     //cout << ric << endl;
     Vector3d ric_cov;

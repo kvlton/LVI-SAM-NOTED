@@ -89,8 +89,7 @@ private:
     std_msgs::Header cloudHeader;
 
 public:
-    ImageProjection():
-    deskewFlag(0)
+    ImageProjection(): deskewFlag(0)
     {
         subImu        = nh.subscribe<sensor_msgs::Imu>        (imuTopic, 2000, &ImageProjection::imuHandler, this, ros::TransportHints().tcpNoDelay());
         subOdom       = nh.subscribe<nav_msgs::Odometry>      (PROJECT_NAME + "/vins/odometry/imu_propagate_ros", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
@@ -293,11 +292,12 @@ public:
             sensor_msgs::Imu thisImuMsg = imuQueue[i];
             double currentImuTime = thisImuMsg.header.stamp.toSec();
 
-            // 当前帧的起始时刻orientation (lidar系下)
+            // 当前帧的起始时刻 orientation (lidar系下)
             // get roll, pitch, and yaw estimation for this scan
             if (currentImuTime <= timeScanCur)
                 imuRPY2rosRPY(&thisImuMsg, &cloudInfo.imuRollInit, &cloudInfo.imuPitchInit, &cloudInfo.imuYawInit);
 
+            // 点云帧的终止时刻
             if (currentImuTime > timeScanNext + 0.01)
                 break;
 

@@ -18,41 +18,53 @@ ProjectionFactor::ProjectionFactor(const Eigen::Vector3d &_pts_i, const Eigen::V
 #endif
 };
 
+// 计算残差和雅克比
 bool ProjectionFactor::Evaluate(double const *const *parameters, double *residuals, double **jacobians) const
 {
     TicToc tic_toc;
+
+    // i时刻位姿
     Eigen::Vector3d Pi(parameters[0][0], parameters[0][1], parameters[0][2]);
     Eigen::Quaterniond Qi(parameters[0][6], parameters[0][3], parameters[0][4], parameters[0][5]);
 
+    // j时刻位姿
     Eigen::Vector3d Pj(parameters[1][0], parameters[1][1], parameters[1][2]);
     Eigen::Quaterniond Qj(parameters[1][6], parameters[1][3], parameters[1][4], parameters[1][5]);
 
+    // 相机imu的外参Tbc
     Eigen::Vector3d tic(parameters[2][0], parameters[2][1], parameters[2][2]);
     Eigen::Quaterniond qic(parameters[2][6], parameters[2][3], parameters[2][4], parameters[2][5]);
 
+    //将第i帧下的3d坐标 转到 第j帧下
     //pts_i 是i时刻归一化相机坐标系下的3D坐标
     //第i帧相机坐标系下的的逆深度
     double inv_dep_i = parameters[3][0];
     //第i帧相机坐标系下的3D坐标
-    Eigen::Vector3d pts_camera_i = pts_i / inv_dep_i;
+    Eigen::Vector3d pts_camera_i = pts_i / inv_dep_i;                 // f_ci
     //第i帧IMU坐标系下的3D坐标
-    Eigen::Vector3d pts_imu_i = qic * pts_camera_i + tic;
+    Eigen::Vector3d pts_imu_i = qic * pts_camera_i + tic;             // f_bi
     //世界坐标系下的3D坐标
-    Eigen::Vector3d pts_w = Qi * pts_imu_i + Pi;
+    Eigen::Vector3d pts_w = Qi * pts_imu_i + Pi;                      // f_w
     //第j帧imu坐标系下的3D坐标
-    Eigen::Vector3d pts_imu_j = Qj.inverse() * (pts_w - Pj);
+    Eigen::Vector3d pts_imu_j = Qj.inverse() * (pts_w - Pj);          // f_bj
     //第j帧相机坐标系下的3D坐标
-    Eigen::Vector3d pts_camera_j = qic.inverse() * (pts_imu_j - tic);
+    Eigen::Vector3d pts_camera_j = qic.inverse() * (pts_imu_j - tic); // f_cj
     Eigen::Map<Eigen::Vector2d> residual(residuals);
 
+    // 1.计算残差
+
 #ifdef UNIT_SPHERE_ERROR 
+    // 单位球投影模型
     residual =  tangent_base * (pts_camera_j.normalized() - pts_j.normalized());
 #else
+    // 针孔模型
     double dep_j = pts_camera_j.z();
     residual = (pts_camera_j / dep_j).head<2>() - pts_j.head<2>();
 #endif
 
     residual = sqrt_info * residual;
+
+    // 2.计算雅克比
 
     //reduce 表示残差residual对fci（pts_camera_j）的导数，同样根据不同的相机模型
     if (jacobians)
@@ -61,6 +73,8 @@ bool ProjectionFactor::Evaluate(double const *const *parameters, double *residua
         Eigen::Matrix3d Rj = Qj.toRotationMatrix();
         Eigen::Matrix3d ric = qic.toRotationMatrix();
         Eigen::Matrix<double, 2, 3> reduce(2, 3);
+
+        // 2.1.相机模型的jacobians
 #ifdef UNIT_SPHERE_ERROR
         double norm = pts_camera_j.norm();
         Eigen::Matrix3d norm_jaco;
@@ -73,14 +87,16 @@ bool ProjectionFactor::Evaluate(double const *const *parameters, double *residua
                      - x1 * x3 / pow(norm, 3),            - x2 * x3 / pow(norm, 3),            1.0 / norm - x3 * x3 / pow(norm, 3);
         reduce = tangent_base * norm_jaco;
 #else
+        // 针孔模型
         reduce << 1. / dep_j, 0, -pts_camera_j(0) / (dep_j * dep_j),
             0, 1. / dep_j, -pts_camera_j(1) / (dep_j * dep_j);
 #endif
         reduce = sqrt_info * reduce;
 
-        // 残差项的Jacobian
+        // 2.2.残差项的Jacobian
         // 先求fci对各项的Jacobian，然后用链式法则乘起来
-        // 对第i帧的位姿 pbi,qbi      2X7的矩阵 最后一项是0
+
+        // a.对第i帧的位姿 pbi,qbi      2X7的矩阵 最后一项是0
         if (jacobians[0])
         {
             Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_pose_i(jacobians[0]);
@@ -92,7 +108,8 @@ bool ProjectionFactor::Evaluate(double const *const *parameters, double *residua
             jacobian_pose_i.leftCols<6>() = reduce * jaco_i;
             jacobian_pose_i.rightCols<1>().setZero();
         }
-        // 对第j帧的位姿 pbj,qbj
+
+        // b.对第j帧的位姿 pbj,qbj
         if (jacobians[1])
         {
             Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_pose_j(jacobians[1]);
@@ -104,7 +121,7 @@ bool ProjectionFactor::Evaluate(double const *const *parameters, double *residua
             jacobian_pose_j.leftCols<6>() = reduce * jaco_j;
             jacobian_pose_j.rightCols<1>().setZero();
         }
-        // 对相机到IMU的外参 pbc,qbc (qic,tic)
+        // c.对相机到IMU的外参 pbc,qbc (qic,tic)
         if (jacobians[2])
         {
             Eigen::Map<Eigen::Matrix<double, 2, 7, Eigen::RowMajor>> jacobian_ex_pose(jacobians[2]);
@@ -116,7 +133,7 @@ bool ProjectionFactor::Evaluate(double const *const *parameters, double *residua
             jacobian_ex_pose.leftCols<6>() = reduce * jaco_ex;
             jacobian_ex_pose.rightCols<1>().setZero();
         }
-        // 对逆深度 \lambda (inv_dep_i)
+        // d.对逆深度 \lambda (inv_dep_i)
         if (jacobians[3])
         {
             Eigen::Map<Eigen::Vector2d> jacobian_feature(jacobians[3]);

@@ -127,10 +127,12 @@ public:
         Eigen::Affine3f transNow = pcl::getTransformation(xCur, yCur, zCur, rollCur, pitchCur, yawCur);
 
         // 0.4 transform cloud from global frame to camera frame
+        // 激光点云: 世界坐标系 ---> 相机坐标系
         pcl::PointCloud<PointType>::Ptr depth_cloud_local(new pcl::PointCloud<PointType>());
         pcl::transformPointCloud(*depthCloud, *depth_cloud_local, transNow.inverse());
 
         // 0.5 project undistorted normalized (z) 2d features onto a unit sphere
+        // 将视觉特征点的归一化坐标投影到单位球上
         pcl::PointCloud<PointType>::Ptr features_3d_sphere(new pcl::PointCloud<PointType>());
         for (int i = 0; i < (int)features_2d.size(); ++i)
         {
@@ -147,8 +149,9 @@ public:
         }
 
         // 3. project depth cloud on a range image, filter points satcked in the same region
+        // 构造激光点云的深度直方图, 对激光点云进行采样 (类似于 LOAM 和 VoxelGrid)
         float bin_res = 180.0 / (float)num_bins; // currently only cover the space in front of lidar (-90 ~ 90)
-        cv::Mat rangeImage = cv::Mat(num_bins, num_bins, CV_32F, cv::Scalar::all(FLT_MAX));
+        cv::Mat rangeImage = cv::Mat(num_bins, num_bins, CV_32F, cv::Scalar::all(FLT_MAX)); // 深度直方图
 
         for (int i = 0; i < (int)depth_cloud_local->size(); ++i)
         {
@@ -156,6 +159,8 @@ public:
             // filter points not in camera view
             if (p.x < 0 || abs(p.y / p.x) > 10 || abs(p.z / p.x) > 10)
                 continue;
+            
+            // 当前激光点在深度直方图上的索引
             // find row id in range image
             float row_angle = atan2(p.z, sqrt(p.x * p.x + p.y * p.y)) * 180.0 / M_PI + 90.0; // degrees, bottom -> up, 0 -> 360
             int row_id = round(row_angle / bin_res);
@@ -164,17 +169,19 @@ public:
             int col_id = round(col_angle / bin_res);
             // id may be out of boundary
             if (row_id < 0 || row_id >= num_bins || col_id < 0 || col_id >= num_bins)
-                continue;
-            // only keep points that's closer
+                continue; // 超出索引范围
+
+            // only keep points that's closer 仅仅保留最近的激光点深度
             float dist = pointDistance(p);
             if (dist < rangeImage.at<float>(row_id, col_id))
             {
-                rangeImage.at<float>(row_id, col_id) = dist;
-                pointsArray[row_id][col_id] = p;
+                rangeImage.at<float>(row_id, col_id) = dist; // 深度
+                pointsArray[row_id][col_id] = p;             // 激光点
             }
         }
 
         // 4. extract downsampled depth cloud from range image
+        // 在深度直方图中, 每个bin只保留最近的一个激光点
         pcl::PointCloud<PointType>::Ptr depth_cloud_local_filter2(new pcl::PointCloud<PointType>());
         for (int i = 0; i < num_bins; ++i)
         {
@@ -188,6 +195,7 @@ public:
         publishCloud(&pub_depth_cloud, depth_cloud_local, stamp_cur, "vins_body_ros");
 
         // 5. project depth cloud onto a unit sphere
+        // 将保留下来的激光点投影到单位球上
         pcl::PointCloud<PointType>::Ptr depth_cloud_unit_sphere(new pcl::PointCloud<PointType>());
         for (int i = 0; i < (int)depth_cloud_local->size(); ++i)
         {
@@ -207,6 +215,7 @@ public:
         kdtree->setInputCloud(depth_cloud_unit_sphere);
 
         // 7. find the feature depth using kd-tree
+        // 在单位球上, 寻找与视觉特征点最近的三个激光点, 来估计视觉特征点的深度
         vector<int> pointSearchInd;
         vector<float> pointSearchSqDis;
         float dist_sq_threshold = pow(sin(bin_res / 180.0 * M_PI) * 5.0, 2);
@@ -215,12 +224,13 @@ public:
             kdtree->nearestKSearch(features_3d_sphere->points[i], 3, pointSearchInd, pointSearchSqDis);
             if (pointSearchInd.size() == 3 && pointSearchSqDis[2] < dist_sq_threshold)
             {
-                float r1 = depth_cloud_unit_sphere->points[pointSearchInd[0]].intensity;
+                // 单位球上最近的三个激光点 A B C (实际坐标)
+                float r1 = depth_cloud_unit_sphere->points[pointSearchInd[0]].intensity; // A的深度
                 Eigen::Vector3f A(depth_cloud_unit_sphere->points[pointSearchInd[0]].x * r1,
                                   depth_cloud_unit_sphere->points[pointSearchInd[0]].y * r1,
                                   depth_cloud_unit_sphere->points[pointSearchInd[0]].z * r1);
 
-                float r2 = depth_cloud_unit_sphere->points[pointSearchInd[1]].intensity;
+                float r2 = depth_cloud_unit_sphere->points[pointSearchInd[1]].intensity; 
                 Eigen::Vector3f B(depth_cloud_unit_sphere->points[pointSearchInd[1]].x * r2,
                                   depth_cloud_unit_sphere->points[pointSearchInd[1]].y * r2,
                                   depth_cloud_unit_sphere->points[pointSearchInd[1]].z * r2);
@@ -230,14 +240,16 @@ public:
                                   depth_cloud_unit_sphere->points[pointSearchInd[2]].y * r3,
                                   depth_cloud_unit_sphere->points[pointSearchInd[2]].z * r3);
 
+                // 视觉特征点在单位球上的坐标 V
                 // https://math.stackexchange.com/questions/100439/determine-where-a-vector-will-intersect-a-plane
                 Eigen::Vector3f V(features_3d_sphere->points[i].x,
                                   features_3d_sphere->points[i].y,
                                   features_3d_sphere->points[i].z);
 
+                // 估计视觉特征点的深度 s
                 Eigen::Vector3f N = (A - B).cross(B - C);
-                float s = (N(0) * A(0) + N(1) * A(1) + N(2) * A(2)) 
-                        / (N(0) * V(0) + N(1) * V(1) + N(2) * V(2));
+                float s = (N(0) * A(0) + N(1) * A(1) + N(2) * A(2))  // (BA X CB) * OA
+                        / (N(0) * V(0) + N(1) * V(1) + N(2) * V(2)); // (BA X CB) * OV
 
                 float min_depth = min(r1, min(r2, r3));
                 float max_depth = max(r1, max(r2, r3));
@@ -254,7 +266,7 @@ public:
                 features_3d_sphere->points[i].y *= s;
                 features_3d_sphere->points[i].z *= s;
                 // the obtained depth here is for unit sphere, VINS estimator needs depth for normalized feature (by value z), (lidar x = camera z)
-                features_3d_sphere->points[i].intensity = features_3d_sphere->points[i].x;
+                features_3d_sphere->points[i].intensity = features_3d_sphere->points[i].x; // ???
             }
         }
 

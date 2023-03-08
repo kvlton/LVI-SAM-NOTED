@@ -6,7 +6,7 @@
 // mtx lock for two threads
 std::mutex mtx_lidar;
 
-// 将5s内的点云放在一起, 并进行体素滤波采样
+// 将5s内的激光点云放在一起, 并进行体素滤波采样
 // global variable for saving the depthCloud shared between two threads
 pcl::PointCloud<PointType>::Ptr depthCloud(new pcl::PointCloud<PointType>());
 
@@ -244,7 +244,7 @@ void lidar_callback(const sensor_msgs::PointCloud2ConstPtr& laser_msg)
     if (++lidar_count % (LIDAR_SKIP+1) != 0)
         return; // 并不是所有激光帧都要
 
-    // 0. listen to transform 获取camera在世界坐标系的位姿(camera to world)
+    // 0. listen to transform 获取坐标变换(camera to world)
     static tf::TransformListener listener;
     static tf::StampedTransform transform; // camera to world
     try{

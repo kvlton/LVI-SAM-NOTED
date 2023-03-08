@@ -58,9 +58,9 @@ class ImageFrame
         // Lidar odometry info
         int reset_id;
 
-        // 通过视觉得到的预积分
-        Vector3d T; // p^c0_ck
-        Matrix3d R; // q^c0_bk
+        // 在视觉坐标系下的PVQ, 注意:PQ是不一样的!!!
+        Vector3d T; // 平移: P^c0_ck
+        Matrix3d R; // 旋转: R^c0_bk
         Vector3d V;
         Vector3d Ba;
         Vector3d Bg;

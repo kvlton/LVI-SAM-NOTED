@@ -17,7 +17,7 @@ struct SFMFeature
 {
     bool state; // 是否被三角化
     int id;
-    vector<pair<int,Vector2d>> observation;
+    vector<pair<int,Vector2d>> observation; // <frame_id, 归一化坐标>
     double position[3];
     double depth;
 };

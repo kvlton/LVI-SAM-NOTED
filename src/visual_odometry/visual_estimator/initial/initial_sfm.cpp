@@ -129,19 +129,19 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 	// have relative_r relative_t
 
 	// intial two view
-	// 其他帧相对于参考帧的位姿
+	// 其他帧 相对于 参考帧l 的位姿
 	q[l].w() = 1;
 	q[l].x() = 0;
 	q[l].y() = 0;
 	q[l].z() = 0;
 	T[l].setZero();
-	q[frame_num - 1] = q[l] * Quaterniond(relative_R);
+	q[frame_num - 1] = q[l] * Quaterniond(relative_R); // 最新帧 相对于 参考帧l 之间的位姿
 	T[frame_num - 1] = relative_T;
 	//cout << "init q_l " << q[l].w() << " " << q[l].vec().transpose() << endl;
 	//cout << "init t_l " << T[l].transpose() << endl;
 
 	// rotate to cam frame
-	// 参考帧相对于其他帧的位姿 (用于ceres优化)
+	// 参考帧l 相对于 其他帧 的位姿 (用于ceres优化)
 	Matrix3d c_Rotation[frame_num];
 	Vector3d c_Translation[frame_num];
 	Quaterniond c_Quat[frame_num];
@@ -197,13 +197,12 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 	// 4: solve pnp l-1; triangulate l-1 ----- l
 	//             l-2              l-2 ----- l
 	// 4: 对于参考帧之前的每一帧, 先进行pnp求解位姿, 再对特征点进行三角化 (第i帧与参考帧)
-	// 4: 循环结束后, 参考帧的所有特征点都被三角化了
 	for (int i = l - 1; i >= 0; i--)
 	{
 		//solve pnp
 		Matrix3d R_initial = c_Rotation[i + 1];
 		Vector3d P_initial = c_Translation[i + 1];
-		if(!solveFrameByPnP(R_initial, P_initial, i, sfm_f)) // 4.1.pnp求解位姿
+		if(!solveFrameByPnP(R_initial, P_initial, i, sfm_f)) // 4.1.pnp求解位姿, 如何保证一定有匹配点呢 ???
 			return false;
 		c_Rotation[i] = R_initial;
 		c_Translation[i] = P_initial;
@@ -294,7 +293,6 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 			problem.AddResidualBlock(cost_function, NULL, c_rotation[l], c_translation[l], 
 									sfm_f[i].position);
 		}
-
 	}
 	// 6.3: ceres优化
 	ceres::Solver::Options options;

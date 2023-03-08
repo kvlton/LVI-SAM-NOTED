@@ -19,16 +19,14 @@ class IntegrationBase
     Eigen::Vector3d acc_0, gyr_0;
     Eigen::Vector3d acc_1, gyr_1;
 
-    // 用于预积分
     const Eigen::Vector3d linearized_acc, linearized_gyr;
     Eigen::Vector3d linearized_ba, linearized_bg;
 
-    // PVQ
-    Eigen::Matrix<double, 15, 15> jacobian;
+    Eigen::Matrix<double, 15, 15> jacobian;   // 雅克比
     Eigen::Matrix<double, 15, 15> covariance; // 协方差
     Eigen::Matrix<double, 18, 18> noise;      // 测量噪声
 
-    // 上一时刻的PVQ
+    // 预积分量 pvq
     double sum_dt;
     Eigen::Vector3d delta_p;
     Eigen::Quaterniond delta_q;
@@ -96,7 +94,7 @@ class IntegrationBase
             propagate(dt_buf[i], acc_buf[i], gyr_buf[i]);
     }
 
-    // 预积分
+    // 预积分(单个imu数据)
     void propagate(double _dt, const Eigen::Vector3d &_acc_1, const Eigen::Vector3d &_gyr_1)
     {
         // imu数据
@@ -104,7 +102,7 @@ class IntegrationBase
         acc_1 = _acc_1;
         gyr_1 = _gyr_1;
 
-        // PVQ
+        // pvq
         Vector3d result_delta_p;
         Quaterniond result_delta_q;
         Vector3d result_delta_v;
@@ -131,7 +129,7 @@ class IntegrationBase
      
     }
 
-    // 采用中值积分进行预积分
+    // 采用中值积分进行预积分 (单个imu数据)
     void midPointIntegration(double _dt, 
                             const Eigen::Vector3d &_acc_0, const Eigen::Vector3d &_gyr_0,
                             const Eigen::Vector3d &_acc_1, const Eigen::Vector3d &_gyr_1,
@@ -142,18 +140,18 @@ class IntegrationBase
     {
         //ROS_INFO("midpoint integration");
 
-        // 中值积分计算PVQ
-        Vector3d un_acc_0 = delta_q * (_acc_0 - linearized_ba);
-        Vector3d un_gyr = 0.5 * (_gyr_0 + _gyr_1) - linearized_bg;     // w
-        result_delta_q = delta_q * Quaterniond(1, un_gyr(0) * _dt / 2, un_gyr(1) * _dt / 2, un_gyr(2) * _dt / 2); // Q
-        Vector3d un_acc_1 = result_delta_q * (_acc_1 - linearized_ba);
-        Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);                 // a
-        result_delta_p = delta_p + delta_v * _dt + 0.5 * un_acc * _dt * _dt; // P
-        result_delta_v = delta_v + un_acc * _dt;                             // V
+        // 采用中值积分进行预积分 (第3讲P37)
+        Vector3d un_acc_0 = delta_q * (_acc_0 - linearized_ba);              // a0
+        Vector3d un_gyr = 0.5 * (_gyr_0 + _gyr_1) - linearized_bg;           // w
+        result_delta_q = delta_q * Quaterniond(1, un_gyr(0) * _dt / 2, un_gyr(1) * _dt / 2, un_gyr(2) * _dt / 2); // q
+        Vector3d un_acc_1 = result_delta_q * (_acc_1 - linearized_ba);       // a1
+        Vector3d un_acc = 0.5 * (un_acc_0 + un_acc_1);                       // a = a0 + a1;
+        result_delta_p = delta_p + delta_v * _dt + 0.5 * un_acc * _dt * _dt; // p
+        result_delta_v = delta_v + un_acc * _dt;                             // v
         result_linearized_ba = linearized_ba;
         result_linearized_bg = linearized_bg;
 
-        // 是否更新PVQ关于bias的jacobian和covariance
+        // 预积分的误差递推公式 (第3讲P46)
         if(update_jacobian)
         {
             Vector3d w_x = 0.5 * (_gyr_0 + _gyr_1) - linearized_bg;
@@ -208,10 +206,10 @@ class IntegrationBase
             jacobian = F * jacobian;
             covariance = F * covariance * F.transpose() + V * noise * V.transpose();
         }
-
     }
 
     
+    // 计算imu预积分残差, 用于imu预积分因子 (第3讲P69)
     // calculate residuals for ceres optimization, used in imu_factor.h
     // paper equation 24
     Eigen::Matrix<double, 15, 1> evaluate(const Eigen::Vector3d &Pi, const Eigen::Quaterniond &Qi, const Eigen::Vector3d &Vi, const Eigen::Vector3d &Bai, const Eigen::Vector3d &Bgi,
@@ -227,9 +225,10 @@ class IntegrationBase
         Eigen::Matrix3d dv_dba = jacobian.block<3, 3>(O_V, O_BA);
         Eigen::Matrix3d dv_dbg = jacobian.block<3, 3>(O_V, O_BG);
 
-        Eigen::Vector3d dba = Bai - linearized_ba;
+        Eigen::Vector3d dba = Bai - linearized_ba; // bias变化量
         Eigen::Vector3d dbg = Bgi - linearized_bg;
 
+        // bias变化导致的预积分变化 (第3讲P70)
         Eigen::Quaterniond corrected_delta_q = delta_q * Utility::deltaQ(dq_dbg * dbg);
         Eigen::Vector3d corrected_delta_v = delta_v + dv_dba * dba + dv_dbg * dbg;
         Eigen::Vector3d corrected_delta_p = delta_p + dp_dba * dba + dp_dbg * dbg;

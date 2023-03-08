@@ -140,6 +140,7 @@ public:
         int currentResetId = round(odomMsg->pose.covariance[0]);
         gtsam::Pose3 lidarPose = gtsam::Pose3(gtsam::Rot3::Quaternion(r_w, r_x, r_y, r_z), gtsam::Point3(p_x, p_y, p_z));
 
+        // 当前关键帧经历了闭环, 因此需要重置预积分
         // correction pose jumped, reset imu pre-integration
         if (currentResetId != imuPreintegrationResetId)
         {
@@ -245,6 +246,7 @@ public:
             else
                 break;
         }
+        
         // add imu factor to graph
         const gtsam::PreintegratedImuMeasurements& preint_imu = dynamic_cast<const gtsam::PreintegratedImuMeasurements&>(*imuIntegratorOpt_);
         gtsam::ImuFactor imu_factor(X(key - 1), V(key - 1), X(key), V(key), B(key - 1), preint_imu);
@@ -363,7 +365,7 @@ public:
         odometry.header.frame_id = "odom";
         odometry.child_frame_id = "odom_imu";
 
-        // transform imu pose to ldiar
+        // transform imu pose to 
         gtsam::Pose3 imuPose = gtsam::Pose3(currentState.quaternion(), currentState.position());
         gtsam::Pose3 lidarPose = imuPose.compose(imu2Lidar);
 
